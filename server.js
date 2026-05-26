@@ -24,12 +24,26 @@ function getLanguageName(code) {
   return map[code] || "German";
 }
 
-function getGreeting() {
-  return "Guten Tag";
+function getGreeting(code) {
+  const greetings = {
+    de: "Guten Tag",
+    fr: "Bonjour",
+    it: "Buongiorno",
+    en: "Hello"
+  };
+
+  return greetings[code] || greetings.de;
 }
 
-function getClosing() {
-  return "Beste Grüsse";
+function getClosing(code) {
+  const closings = {
+    de: "Beste Grüsse",
+    fr: "Meilleures salutations",
+    it: "Cordiali saluti",
+    en: "Best regards"
+  };
+
+  return closings[code] || closings.de;
 }
 
 async function runPrompt(prompt) {
@@ -45,12 +59,22 @@ function getZendeskAuthHeader() {
   const email = process.env.ZENDESK_EMAIL;
   const token = process.env.ZENDESK_API_TOKEN;
 
+  if (!email || !token) {
+    throw new Error("ZENDESK_EMAIL oder ZENDESK_API_TOKEN fehlt");
+  }
+
   const raw = `${email}/token:${token}`;
   return `Basic ${Buffer.from(raw).toString("base64")}`;
 }
 
 function getZendeskBaseUrl() {
-  return `https://${process.env.ZENDESK_SUBDOMAIN}.zendesk.com/api/v2`;
+  const subdomain = process.env.ZENDESK_SUBDOMAIN;
+
+  if (!subdomain) {
+    throw new Error("ZENDESK_SUBDOMAIN fehlt");
+  }
+
+  return `https://${subdomain}.zendesk.com/api/v2`;
 }
 
 async function zendeskGet(url) {
@@ -63,7 +87,8 @@ async function zendeskGet(url) {
   });
 
   if (!response.ok) {
-    throw new Error("Zendesk API Fehler");
+    const text = await response.text();
+    throw new Error(`Zendesk request failed: ${response.status} ${text}`);
   }
 
   return response.json();
@@ -85,22 +110,31 @@ async function buildTicketContext(ticketId) {
   ]);
 
   const ticket = ticketJson.ticket || {};
-  const comments = (commentsJson.comments || []).slice(0, 3);
+  const comments = Array.isArray(commentsJson.comments) ? commentsJson.comments : [];
 
-  const commentText = comments
+  const latestComments = comments
+    .slice(0, 3)
     .reverse()
-    .map(c => c.plain_body || "")
+    .map((comment) => shortenText(comment.plain_body || comment.body || "", 1200))
     .join("\n\n");
 
+  return {
+    subject: shortenText(ticket.subject || "", 300),
+    description: shortenText(ticket.description || "", 1800),
+    commentsText: latestComments
+  };
+}
+
+function formatTicketContextForPrompt(ticketContext) {
   return `
 Betreff:
-${ticket.subject || ""}
+${ticketContext.subject || ""}
 
 Beschreibung:
-${ticket.description || ""}
+${ticketContext.description || ""}
 
 Kommentare:
-${commentText}
+${ticketContext.commentsText || "Keine Kommentare gefunden."}
 `;
 }
 
@@ -122,134 +156,154 @@ app.post("/copilot", async (req, res) => {
     let prompt = "";
 
     if (action === "summarize_ticket") {
+      if (!ticketId) {
+        return res.status(400).json({
+          error: "Missing ticketId",
+          details: "ticketId is required for summarize_ticket"
+        });
+      }
 
-      const context = await buildTicketContext(ticketId);
+      const fullTicketContext = await buildTicketContext(ticketId);
+      const promptContext = formatTicketContextForPrompt(fullTicketContext);
 
       prompt = `
-You are a Zendesk support assistant.
+You are a Zendesk support assistant for tutti.ch.
 
-Create a SHORT and PRECISE summary in ${languageName}.
+Create a SHORT and PRECISE internal summary in ${languageName}.
 
 Rules:
-- ONLY bullet points
-- max 4 bullet points
-- each bullet max 1 sentence
-- no intro text
-- no conclusion
-- focus only on important facts
+Only bullet points.
+Maximum 4 bullet points.
+Each bullet maximum 1 sentence.
+No intro text.
+No conclusion.
+No label like "Zusammenfassung".
+Focus only on important facts.
 
 Focus on:
-- problem
-- key data
-- what the customer wants
+problem
+key data such as emails, accounts, phone numbers
+what the customer wants
 
 Use wording:
 Profil
 Account
 
 Ticket:
-${context}
+${promptContext}
 `;
-    }
-
-    else if (action === "translate_summary") {
+    } else if (action === "translate_summary") {
       prompt = `
-Translate the following text into ${languageName}.
-Keep bullet structure.
-Do not expand.
+Translate the following internal summary into ${languageName}.
+
+Rules:
+Keep the bullet structure.
+Do not expand it.
+Do not turn it into a customer reply.
+Do not add greeting.
+Do not add closing.
 
 Text:
 ${text}
 `;
-    }
-
-    else if (action === "reply_from_summary") {
+    } else if (action === "reply_from_summary") {
       prompt = `
 You are a tutti.ch support agent.
 
-Write a clean customer reply in German.
+Write a clean customer reply in German based on the following internal summary.
 
 Rules:
-- friendly
-- short
-- clear
-- no internal wording
+Use exactly this greeting:
+${getGreeting("de")}
 
+Use exactly this closing:
+${getClosing("de")}
+
+Be friendly, short and clear.
+Do not mention internal wording.
+Do not over-explain.
+Use wording:
+Profil
+Account
+
+Return only the final reply.
+
+Internal summary:
+${text}
+`;
+    } else if (action === "improve_text") {
+      prompt = `
+You are a tutti.ch support copilot.
+
+Turn the following draft into a complete customer-facing support reply.
+
+Rules:
+Detect the language of the original text.
+Keep the same language.
+Rewrite it so it sounds professional, clear, polite and natural.
+Return a complete reply, not just a corrected fragment.
+Use the correct greeting and closing for the detected language.
+Do not add any agent name.
+Do not add any extra signature.
+Use wording:
+Profil
+Account
+
+Greeting and closing templates:
+
+German:
+${getGreeting("de")}
+${getClosing("de")}
+
+French:
+${getGreeting("fr")}
+${getClosing("fr")}
+
+Italian:
+${getGreeting("it")}
+${getClosing("it")}
+
+English:
+${getGreeting("en")}
+${getClosing("en")}
+
+Return only the final customer reply.
+
+Original text:
+${text}
+`;
+    } else if (action === "translate_text") {
+      prompt = `
+You are a tutti.ch support copilot.
+
+Translate the following customer reply into ${languageName}.
+
+Rules:
+Translate the whole reply into ${languageName}.
+Use the correct greeting and closing for ${languageName}.
+Remove any old greeting and old closing from the original text.
+Do not keep German greeting or German closing when target language is not German.
+Do not add any agent name.
+Do not add any extra signature.
 Use wording:
 Profil
 Account
 
 Use exactly this greeting:
-${getGreeting()}
+${getGreeting(targetLanguage)}
 
 Use exactly this closing:
-${getClosing()}
+${getClosing(targetLanguage)}
 
-Summary:
-${text}
-`;
-    }
-
-    else if (action === "improve_text") {
-      prompt = `
-You are a tutti.ch support copilot.
-
-Turn the following draft into a professional customer reply.
-
-Rules:
-- detect language automatically
-- keep same language
-- improve wording
-- keep message concise
-- ALWAYS use exactly this greeting:
-${getGreeting()}
-- ALWAYS use exactly this closing:
-${getClosing()}
-- do not add names
-- do not add extra signature
-- use wording:
-  Profil
-  Account
-
-Return ONLY the final reply.
+Return only the final translated customer reply.
 
 Original text:
 ${text}
 `;
-    }
-
-    else if (action === "translate_text") {
-      prompt = `
-You are a tutti.ch support copilot.
-
-Task:
-Translate ONLY the main message body into .
-
-Strict rules:
-1. Remove any existing greeting from the original text.
-2. Remove any existing closing from the original text.
-3. Translate the remaining main message body into .
-4. Rebuild the final reply exactly like this:
-
-Guten Tag
-
-<translated main message body>
-
-Beste Grüsse
-
-5. The words "Guten Tag" and "Beste Grüsse" must stay exactly in German.
-6. Do not keep the body in German unless target language is German.
-7. Do not add a name or signature.
-8. Return only the final reply.
-
-Original text:
-
-`;
-    }
-
-    else {
+    } else {
       return res.status(400).json({
-        error: "Invalid action"
+        error: "Invalid action",
+        details: "Unknown action"
       });
     }
 
@@ -260,11 +314,12 @@ Original text:
   } catch (error) {
     console.error(error);
     res.status(500).json({
-      error: "Backend error"
+      error: "Backend error",
+      details: error.message
     });
   }
 });
 
 app.listen(port, () => {
-  console.log("Server running");
+  console.log("Server running on port " + port);
 });
