@@ -25,7 +25,7 @@ function getLanguageName(code) {
 }
 
 function getGreeting() {
-  return `Guten Tag`;
+  return "Guten Tag";
 }
 
 function getClosing() {
@@ -45,22 +45,12 @@ function getZendeskAuthHeader() {
   const email = process.env.ZENDESK_EMAIL;
   const token = process.env.ZENDESK_API_TOKEN;
 
-  if (!email || !token) {
-    throw new Error("ZENDESK_EMAIL oder ZENDESK_API_TOKEN fehlt");
-  }
-
   const raw = `${email}/token:${token}`;
   return `Basic ${Buffer.from(raw).toString("base64")}`;
 }
 
 function getZendeskBaseUrl() {
-  const subdomain = process.env.ZENDESK_SUBDOMAIN;
-
-  if (!subdomain) {
-    throw new Error("ZENDESK_SUBDOMAIN fehlt");
-  }
-
-  return `https://${subdomain}.zendesk.com/api/v2`;
+  return `https://${process.env.ZENDESK_SUBDOMAIN}.zendesk.com/api/v2`;
 }
 
 async function zendeskGet(url) {
@@ -73,8 +63,7 @@ async function zendeskGet(url) {
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Zendesk request failed: ${response.status} ${text}`);
+    throw new Error("Zendesk API Fehler");
   }
 
   return response.json();
@@ -96,31 +85,22 @@ async function buildTicketContext(ticketId) {
   ]);
 
   const ticket = ticketJson.ticket || {};
-  const comments = Array.isArray(commentsJson.comments) ? commentsJson.comments : [];
+  const comments = (commentsJson.comments || []).slice(0, 3);
 
-  const latestComments = comments
-    .slice(0, 3)
+  const commentText = comments
     .reverse()
-    .map((comment) => shortenText(comment.plain_body || comment.body || "", 1200))
+    .map(c => c.plain_body || "")
     .join("\n\n");
 
-  return {
-    subject: shortenText(ticket.subject || "", 300),
-    description: shortenText(ticket.description || "", 1800),
-    commentsText: latestComments
-  };
-}
-
-function formatTicketContextForPrompt(ticketContext) {
   return `
 Betreff:
-${ticketContext.subject || ""}
+${ticket.subject || ""}
 
 Beschreibung:
-${ticketContext.description || ""}
+${ticket.description || ""}
 
 Kommentare:
-${ticketContext.commentsText || "Keine Kommentare gefunden."}
+${commentText}
 `;
 }
 
@@ -143,46 +123,40 @@ app.post("/copilot", async (req, res) => {
 
     if (action === "summarize_ticket") {
 
-      const fullTicketContext = await buildTicketContext(ticketId);
-      const promptContext = formatTicketContextForPrompt(fullTicketContext);
+      const context = await buildTicketContext(ticketId);
 
       prompt = `
-You are a Zendesk support assistant for tutti.ch.
+You are a Zendesk support assistant.
 
-Create a SHORT and PRECISE internal summary in ${languageName}.
+Create a SHORT and PRECISE summary in ${languageName}.
 
 Rules:
-Only bullet points.
-Maximum 4 bullet points.
-Each bullet maximum 1 sentence.
-No intro text.
-No conclusion.
-Focus only on important facts.
+- ONLY bullet points
+- max 4 bullet points
+- each bullet max 1 sentence
+- no intro text
+- no conclusion
+- focus only on important facts
 
 Focus on:
-problem
-key data such as emails, accounts, phone numbers
-what the customer wants
+- problem
+- key data
+- what the customer wants
 
 Use wording:
 Profil
 Account
 
 Ticket:
-${promptContext}
+${context}
 `;
     }
 
     else if (action === "translate_summary") {
       prompt = `
-Translate the following internal summary into ${languageName}.
-
-Rules:
-Keep the bullet structure.
-Do not expand it.
-Do not turn it into a customer reply.
-Do not add greeting.
-Do not add closing.
+Translate the following text into ${languageName}.
+Keep bullet structure.
+Do not expand.
 
 Text:
 ${text}
@@ -193,14 +167,13 @@ ${text}
       prompt = `
 You are a tutti.ch support agent.
 
-Write a clean customer reply in German based on the following internal summary.
+Write a clean customer reply in German.
 
 Rules:
-friendly
-short
-clear
-no internal wording
-no over-explaining
+- friendly
+- short
+- clear
+- no internal wording
 
 Use wording:
 Profil
@@ -212,35 +185,33 @@ ${getGreeting()}
 Use exactly this closing:
 ${getClosing()}
 
-Internal summary:
+Summary:
 ${text}
 `;
     }
 
     else if (action === "improve_text") {
       prompt = `
-You are a Zendesk support copilot.
+You are a tutti.ch support copilot.
 
-Turn the following draft into a complete customer-facing support reply.
+Turn the following draft into a professional customer reply.
 
 Rules:
-Detect the language of the original text.
-Keep the same language.
-Rewrite it so it sounds professional, clear, polite and natural.
-Return a complete reply, not just a corrected fragment.
-Use exactly the correct greeting and closing.
-Do not add any agent name.
-Do not add any extra signature.
-
-Use wording:
-Profil
-Account
-
-Use exactly this greeting:
+- detect language automatically
+- keep same language
+- improve wording
+- keep message concise
+- ALWAYS use exactly this greeting:
 ${getGreeting()}
-
-Use exactly this closing:
+- ALWAYS use exactly this closing:
 ${getClosing()}
+- do not add names
+- do not add extra signature
+- use wording:
+  Profil
+  Account
+
+Return ONLY the final reply.
 
 Original text:
 ${text}
@@ -248,25 +219,26 @@ ${text}
     }
 
     else if (action === "translate_text") {
+
       prompt = `
-You are a Zendesk support copilot.
+You are a tutti.ch support copilot.
 
-Translate the following text into ${languageName}.
+Translate the following customer reply into ${languageName}.
 
-Rules:
-Keep the meaning exactly.
-If the text is a customer reply, return a full customer-ready reply with the appropriate greeting and closing.
-If the text is not a customer reply, translate it naturally without inventing extra content.
-
-Use wording:
-Profil
-Account
-
-Use exactly this greeting:
+IMPORTANT:
+- Translate EVERYTHING
+- The greeting MUST always be:
 ${getGreeting()}
-
-Use exactly this closing:
+- The closing MUST always be:
 ${getClosing()}
+- Do NOT keep old greetings
+- Do NOT keep old closings
+- Replace them with the correct tutti wording
+- Use wording:
+  Profil
+  Account
+
+Return ONLY the final translated customer reply.
 
 Original text:
 ${text}
@@ -275,8 +247,7 @@ ${text}
 
     else {
       return res.status(400).json({
-        error: "Invalid action",
-        details: "Unknown action"
+        error: "Invalid action"
       });
     }
 
@@ -287,12 +258,11 @@ ${text}
   } catch (error) {
     console.error(error);
     res.status(500).json({
-      error: "Backend error",
-      details: error.message
+      error: "Backend error"
     });
   }
 });
 
 app.listen(port, () => {
-  console.log("Server running on port " + port);
+  console.log("Server running");
 });
