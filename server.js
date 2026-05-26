@@ -24,36 +24,12 @@ function getLanguageName(code) {
   return map[code] || "German";
 }
 
-function getGreeting(code, requesterName) {
-  const safeName = requesterName || "{{ticket.requester.name}}";
-
-  const greetings = {
-    de: `Grüezi ${safeName}
-
-Vielen Dank für Ihre Anfrage.`,
-    fr: `Bonjour ${safeName}
-
-Merci beaucoup pour votre demande.`,
-    it: `Gentile ${safeName}
-
-La ringraziamo per la Sua richiesta.`,
-    en: `Hello ${safeName}
-
-Thank you for your inquiry.`
-  };
-
-  return greetings[code] || greetings.de;
+function getGreeting() {
+  return `Guten Tag`;
 }
 
-function getClosing(code) {
-  const closings = {
-    de: "Freundliche Grüsse",
-    fr: "Meilleures salutations",
-    it: "Cordiali saluti",
-    en: "Kind regards"
-  };
-
-  return closings[code] || closings.de;
+function getClosing() {
+  return "Beste Grüsse";
 }
 
 async function runPrompt(prompt) {
@@ -158,23 +134,14 @@ app.post("/copilot", async (req, res) => {
       action,
       targetLanguage = "de",
       text = "",
-      ticketId = "",
-      requesterName = ""
+      ticketId = ""
     } = req.body;
 
     const languageName = getLanguageName(targetLanguage);
-    const greeting = getGreeting(targetLanguage, requesterName);
-    const closing = getClosing(targetLanguage);
 
     let prompt = "";
 
     if (action === "summarize_ticket") {
-      if (!ticketId) {
-        return res.status(400).json({
-          error: "Missing ticketId",
-          details: "ticketId is required for summarize_ticket"
-        });
-      }
 
       const fullTicketContext = await buildTicketContext(ticketId);
       const promptContext = formatTicketContextForPrompt(fullTicketContext);
@@ -190,7 +157,6 @@ Maximum 4 bullet points.
 Each bullet maximum 1 sentence.
 No intro text.
 No conclusion.
-No label like "Zusammenfassung".
 Focus only on important facts.
 
 Focus on:
@@ -198,10 +164,16 @@ problem
 key data such as emails, accounts, phone numbers
 what the customer wants
 
+Use wording:
+Profil
+Account
+
 Ticket:
 ${promptContext}
 `;
-    } else if (action === "translate_summary") {
+    }
+
+    else if (action === "translate_summary") {
       prompt = `
 Translate the following internal summary into ${languageName}.
 
@@ -215,7 +187,9 @@ Do not add closing.
 Text:
 ${text}
 `;
-    } else if (action === "reply_from_summary") {
+    }
+
+    else if (action === "reply_from_summary") {
       prompt = `
 You are a tutti.ch support agent.
 
@@ -228,16 +202,22 @@ clear
 no internal wording
 no over-explaining
 
+Use wording:
+Profil
+Account
+
 Use exactly this greeting:
-${getGreeting("de", requesterName)}
+${getGreeting()}
 
 Use exactly this closing:
-${getClosing("de")}
+${getClosing()}
 
 Internal summary:
 ${text}
 `;
-    } else if (action === "improve_text") {
+    }
+
+    else if (action === "improve_text") {
       prompt = `
 You are a Zendesk support copilot.
 
@@ -248,38 +228,26 @@ Detect the language of the original text.
 Keep the same language.
 Rewrite it so it sounds professional, clear, polite and natural.
 Return a complete reply, not just a corrected fragment.
-Use exactly the correct standard greeting and closing for the detected language.
+Use exactly the correct greeting and closing.
 Do not add any agent name.
 Do not add any extra signature.
-Return only the final customer reply.
 
-Customer name:
-${requesterName}
+Use wording:
+Profil
+Account
 
-German greeting:
-${getGreeting("de", requesterName)}
-German closing:
-${getClosing("de")}
+Use exactly this greeting:
+${getGreeting()}
 
-French greeting:
-${getGreeting("fr", requesterName)}
-French closing:
-${getClosing("fr")}
-
-Italian greeting:
-${getGreeting("it", requesterName)}
-Italian closing:
-${getClosing("it")}
-
-English greeting:
-${getGreeting("en", requesterName)}
-English closing:
-${getClosing("en")}
+Use exactly this closing:
+${getClosing()}
 
 Original text:
 ${text}
 `;
-    } else if (action === "translate_text") {
+    }
+
+    else if (action === "translate_text") {
       prompt = `
 You are a Zendesk support copilot.
 
@@ -289,34 +257,23 @@ Rules:
 Keep the meaning exactly.
 If the text is a customer reply, return a full customer-ready reply with the appropriate greeting and closing.
 If the text is not a customer reply, translate it naturally without inventing extra content.
-Return only the final text.
 
-For customer replies, use these templates.
+Use wording:
+Profil
+Account
 
-German greeting:
-${getGreeting("de", requesterName)}
-German closing:
-${getClosing("de")}
+Use exactly this greeting:
+${getGreeting()}
 
-French greeting:
-${getGreeting("fr", requesterName)}
-French closing:
-${getClosing("fr")}
-
-Italian greeting:
-${getGreeting("it", requesterName)}
-Italian closing:
-${getClosing("it")}
-
-English greeting:
-${getGreeting("en", requesterName)}
-English closing:
-${getClosing("en")}
+Use exactly this closing:
+${getClosing()}
 
 Original text:
 ${text}
 `;
-    } else {
+    }
+
+    else {
       return res.status(400).json({
         error: "Invalid action",
         details: "Unknown action"
@@ -326,6 +283,7 @@ ${text}
     const output = await runPrompt(prompt);
 
     res.json({ output });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({
