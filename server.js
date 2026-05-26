@@ -219,29 +219,31 @@ ${text}
     }
 
     else if (action === "translate_text") {
-
       prompt = `
 You are a tutti.ch support copilot.
 
-Translate the following customer reply into ${languageName}.
+Task:
+Translate ONLY the main message body into .
 
-IMPORTANT:
-- Translate EVERYTHING
-- The greeting MUST always be:
-${getGreeting()}
-- The closing MUST always be:
-${getClosing()}
-- Do NOT keep old greetings
-- Do NOT keep old closings
-- Replace them with the correct tutti wording
-- Use wording:
-  Profil
-  Account
+Strict rules:
+1. Remove any existing greeting from the original text.
+2. Remove any existing closing from the original text.
+3. Translate the remaining main message body into .
+4. Rebuild the final reply exactly like this:
 
-Return ONLY the final translated customer reply.
+Guten Tag
+
+<translated main message body>
+
+Beste Grüsse
+
+5. The words "Guten Tag" and "Beste Grüsse" must stay exactly in German.
+6. Do not keep the body in German unless target language is German.
+7. Do not add a name or signature.
+8. Return only the final reply.
 
 Original text:
-${text}
+
 `;
     }
 
